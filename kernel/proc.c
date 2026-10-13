@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "kernel/uproc.h"
 
 struct cpu cpus[NCPU];
 
@@ -124,6 +125,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->trace_mask = 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -167,6 +169,7 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->trace_mask = 0;
   p->state = UNUSED;
 }
 
@@ -277,6 +280,9 @@ kfork(void)
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
+
+  // Child inherits the parent's tracing settings.
+  np->trace_mask = p->trace_mask;
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
@@ -700,4 +706,53 @@ procdump(void)
     printk("%d %s %s", p->pid, state, p->name);
     printk("\n");
   }
+}
+
+uint64
+nproc(void)
+{
+  struct proc *p;
+  uint64 count = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+
+    if(p->state != UNUSED)
+      count++;
+
+    release(&p->lock);
+  }
+
+  return count;
+}
+
+int
+getprocs(struct uproc *buf, int max)
+{
+  struct proc *p;
+  int count = 0;
+
+  if(max < 0)
+    return -1;
+
+  acquire(&wait_lock);
+
+  for(p = proc; p < &proc[NPROC] && count < max; p++){
+    acquire(&p->lock);
+
+    if(p->state != UNUSED){
+      buf[count].pid = p->pid;
+      buf[count].ppid = p->parent ? p->parent->pid : 0;
+      buf[count].state = p->state;
+      buf[count].sz = p->sz;
+      safestrcpy(buf[count].name, p->name, sizeof(buf[count].name));
+      count++;
+    }
+
+    release(&p->lock);
+  }
+
+  release(&wait_lock);
+
+  return count;
 }

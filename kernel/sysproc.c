@@ -6,6 +6,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "kernel/sysinfo.h"
+#include "kernel/uproc.h"
 
 uint64
 sys_exit(void)
@@ -109,4 +111,78 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+
+uint64
+sys_trace(void)
+{
+  int mask;
+
+  argint(0, &mask);
+  myproc()->trace_mask = mask;
+
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 addr;
+  struct sysinfo info;
+  struct proc *p = myproc();
+
+  // Get the user's buffer address.
+  argaddr(0, &addr);
+
+  // Collect system statistics.
+  info.freemem = freemem();
+  info.nproc = nproc();
+  info.nopenfile = nopenfile();
+
+  // Copy the information into user memory.
+if(copyout(p->pagetable, p->sz, addr, (char *)&info, sizeof(info)) < 0)
+    return -1;
+
+  return 0;
+}
+
+uint64
+sys_getprocs(void)
+{
+  uint64 addr;
+  int max;
+  int count;
+  int limit;
+  struct uproc *buf;
+  struct proc *p = myproc();
+
+  argaddr(0, &addr);
+  argint(1, &max);
+
+  if(max < 0)
+    return -1;
+
+  if(max == 0)
+    return 0;
+
+  buf = (struct uproc *)kalloc();
+  if(buf == 0)
+    return -1;
+
+  limit = PGSIZE / sizeof(struct uproc);
+  if(max < limit)
+    limit = max;
+
+  count = getprocs(buf, limit);
+
+  if(count < 0 ||
+     copyout(p->pagetable, p->sz, addr,
+             (char *)buf, count * sizeof(struct uproc)) < 0){
+    kfree(buf);
+    return -1;
+  }
+
+  kfree(buf);
+  return count;
 }
